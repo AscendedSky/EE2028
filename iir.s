@@ -146,11 +146,6 @@ STORE_CURRENT:
 	LDR R4, [R1]
 	LDR R5, [R2]
 	MLA R8, R3, R4, R8
-	CMP R8, #0
-	BGE step_2
-	SUB R8, R8, #99
-
-step_2:
 	SDIV R8, R8, R5
 	LDR R11, =head
 	LDR R12, [R11]
