@@ -14,8 +14,6 @@ UART_HandleTypeDef huart1;
 
 int main(void)
 {
-    int seconds_count = 1;
-    int move=1;
     float temp_data;
     float hum_data;
     float pres_data;
@@ -27,25 +25,23 @@ int main(void)
     BSP_HSENSOR_Init();
     BSP_TSENSOR_Init();
     BSP_PSENSOR_Init();
+    BSP_LED_Init(LED2);
 
     char message_print[64]; // Increased buffer size
-    snprintf(message_print, sizeof(message_print), "Entering Red Light, Green Light as Player/Enforcer\r\n");
-
+    snprintf(message_print, sizeof(message_print), "Entering Red Light, Green Light as Player \r\n");
+    HAL_Delay(5000);
     HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
     HAL_Delay(5000);
 
-    snprintf(message_print, sizeof(message_print), "Entering Green Light as Enforcer\r\n");
+    snprintf(message_print, sizeof(message_print), " Green Light! \r\n");
     HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
-    while (game){
+    while (game==1){
+    	int seconds_count = 1;
 		while (seconds_count<=10)
 		{
-
-			float accel_data[3];
-			int16_t accel_data_i16[3] = { 0 };
-			BSP_ACCELERO_AccGetXYZ(accel_data_i16);
-
 			snprintf(message_print, sizeof(message_print), " \r\n %d: Green Light. Can Move \r\n", seconds_count);
 			HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
+			BSP_LED_On(LED2);
 			if (seconds_count%2==0){
 				temp_data = BSP_TSENSOR_ReadTemp();
 				hum_data = BSP_HSENSOR_ReadHumidity();
@@ -58,42 +54,70 @@ int main(void)
 
 			seconds_count++;
 		}
+		BSP_LED_Off(LED2);
 
 		float accel_const[3];
-		int16_t accel_const_i16[3] = { 0 };// array to store the x, y and z readings.
+		int16_t accel_const_i16[3] = { 0 };
 		BSP_ACCELERO_AccGetXYZ(accel_const_i16);
 		accel_const[0] = (float)accel_const_i16[0] * (9.8/1000.0f);
 		accel_const[1] = (float)accel_const_i16[1] * (9.8/1000.0f);
 		accel_const[2] = (float)accel_const_i16[2] * (9.8/1000.0f);
 
-		snprintf(message_print, sizeof(message_print), "Entering Red Light as Player/Enforcer\r\n");
+		float gyro_const[3];
+		int16_t gyro_const_i16[3] = { 0 };
+		BSP_ACCELERO_AccGetXYZ(gyro_const_i16);
+		gyro_const[0] = (float)gyro_const_i16[0] * (35/1000.0f);
+		gyro_const[1] = (float)gyro_const_i16[1] * (35/1000.0f);
+		gyro_const[2] = (float)gyro_const_i16[2] * (35/1000.0f);
+
+		snprintf(message_print, sizeof(message_print), "\r\n Gyro X : %f \r\n Gyro Y : %f \r\n Gyro Z : %f \r\n", gyro_const[0], gyro_const[1], gyro_const[2]);
+		HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
+
+		snprintf(message_print, sizeof(message_print), " Red Light \r\n");
 		HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
 
 		while (seconds_count>10 && seconds_count<=20)
 			{
 			float accel_data[3];
-			int16_t accel_data_i16[3] = { 0 };			// array to store the x, y and z readings.
+			int16_t accel_data_i16[3] = { 0 };
 			BSP_ACCELERO_AccGetXYZ(accel_data_i16);
 			seconds_count++;
 			accel_data[0] = (float)accel_data_i16[0] * (9.8/1000.0f);
 			accel_data[1] = (float)accel_data_i16[1] * (9.8/1000.0f);
 			accel_data[2] = (float)accel_data_i16[2] * (9.8/1000.0f);
-			// Format the message with the temperature value
+
+			float gyro_data[3];
+			int16_t gyro_data_i16[3] = { 0 };
+			BSP_GYRO_GetXYZ(gyro_data_i16);
+			gyro_data[0] = (float)gyro_data_i16[0] * (35/1000.0f);
+			gyro_data[1] = (float)gyro_data_i16[1] * (35/1000.0f);
+			gyro_data[2] = (float)gyro_data_i16[2] * (35/1000.0f);
+
 			snprintf(message_print, sizeof(message_print), "\r\n %d: Red Light. Cannot Move \r\n", seconds_count-11);
 			HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
-			HAL_Delay(1000);
+			BSP_LED_Off(LED2);
+			HAL_Delay(500);
+			BSP_LED_On(LED2);
+			HAL_Delay(500);
 			if (seconds_count%2==0){
 				snprintf(message_print, sizeof(message_print), "\r\n Accel X : %f \r\n Accel Y : %f \r\n Accel Z : %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
 				HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
+				snprintf(message_print, sizeof(message_print), "\r\n Gyro X : %f \r\n Gyro Y : %f \r\n Gyro Z : %f \r\n", gyro_data[0], gyro_data[1], gyro_data[2]);
+				HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
 			}
-			if (accel_data[0]-accel_const[0]>=0.5|accel_data[1]-accel_const[1]>=0.5|accel_data[2]-accel_const[2]>=0.5){
+			if (accel_data[0]-accel_const[0]>=0.5 || accel_data[1]-accel_const[1]>=0.5 || accel_data[2]-accel_const[2]>=0.5){
 				snprintf(message_print, sizeof(message_print), "\r\n Game Over\r\n");
 				HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
 				game=0;
+				break;
 				}
-
+			else if (gyro_data[0]-gyro_const[0]>=10 || gyro_data[1]-gyro_const[1]>=10 || gyro_data[2]-gyro_const[2]>=10){
+				snprintf(message_print, sizeof(message_print), "\r\n Game Over\r\n");
+				HAL_UART_Transmit(&huart1, (uint8_t*)message_print, strlen(message_print), 0xFFFF);
+				game=0;
+				break;
+				}
 			}
-		seconds_count=0;
     }
 }
 
