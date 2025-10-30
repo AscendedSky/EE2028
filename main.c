@@ -18,14 +18,17 @@
 #include "../../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal.h"
 #include <math.h>
 #include <stdlib.h>
-
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_gyro.h"
+#include"ssd1306.h"
+#include"ssd1306_tests.h"
+#include"ssd1306_fonts.h"
 
 
 /* --- Peripheral Handles --- */
 UART_HandleTypeDef huart1;
 TIM_HandleTypeDef htim16;
 TIM_HandleTypeDef htim17;
-
+I2C_HandleTypeDef hi2c1;
 
 
 /* --- Role Configuration --- */
@@ -33,11 +36,26 @@ TIM_HandleTypeDef htim17;
 #define ROLE_ENFORCER    2
 uint8_t role = ROLE_PLAYER;   // Change manually for now
 
-/* --- Thresholds and Timing --- */
+
+/* --- Thresholds and Timing Game 2--- */
 #define MAG_THRESHOLD     400.0f      // Example proximity threshold
 #define PROXIMITY_THRESHOLD 100.0f
 #define ESCAPE_WINDOW_MS  3000        // 3-second reaction time window
 #define COOLDOWN_MS 3000
+
+// Global static variables for Red Light Green Light
+static int game_status = 1;
+static int game_seconds_count = 0;
+static uint32_t game_last_tick = 0;
+static uint32_t game_blink_tick = 0;
+static uint8_t game_led_state = 0;
+static uint8_t game_initialized = 0;  // 0 = not started, 1 = playing, 2 = waiting before start
+static uint8_t game_calibrated = 0;
+static uint8_t game_over_msg_sent = 0;  // Flag for sending game over message once
+
+static float accel_const[3] = {0};
+static float gyro_const[3] = {0};
+
 
 /* --- Pins --- */
 #define BUZZER_PIN         GPIO_PIN_14
@@ -48,13 +66,16 @@ float Read_Magnetometer(void);
 void UART_Send(char *msg);
 uint8_t Button_Pressed(void);
 void CatchAndRun(void);
+void RedLightGreenLight(void);
 static void UART1_Init(void);
 static void MX_GPIO_Init(void);
 void SystemClock_Config(void);
 static void MX_TIM16_Init(void);
 static void MX_TIM17_Init(void);
+static void I2C1_Init(void);
 
 /* --- Misc variables --- */
+char msg[100]; //message variable declaration
 
 //uint8_t paused = 0;              // 0 = running, 1 = paused
 uint32_t last_press_time = 0;    // last button press time (ms)
@@ -74,12 +95,15 @@ int main(void){
 	BSP_LED_Init(LED2);
 	BSP_MAGNETO_Init();
     BSP_ACCELERO_Init();
-    //BSP_GYRO_Init();
+    BSP_GYRO_Init();
     BSP_HSENSOR_Init();
     BSP_TSENSOR_Init();
     BSP_PSENSOR_Init();
     HAL_TIM_Base_Start_IT(&htim16);
     HAL_TIM_Base_Start_IT(&htim17);
+    I2C1_Init();
+    ssd1306_Init();
+
     /*
     while (1){
     	float magValue = Read_Magnetometer();
@@ -88,13 +112,16 @@ int main(void){
     	UART_Send(msg);
     	HAL_Delay(1000);
     }*/
-
+    ssd1306_Fill(Black);  // Clear display buffer
+        	ssd1306_SetCursor(0,32);
+        	ssd1306_WriteString("Welcome to EE2028 (It has not been fun)", Font_7x10, White);
+        	ssd1306_UpdateScreen();
+        	HAL_Delay(2000);
+        	ssd1306_Fill(Black);
+        	ssd1306_UpdateScreen();
     while (1){
     	if (currentGame){
-    		char msg[] = "Entering GAME 1\r\n";
-    		UART_Send(msg);
-    		HAL_Delay(500);
-    		continue; //to fill in with func
+    		RedLightGreenLight();
         }
         else{
             CatchAndRun();
@@ -106,13 +133,186 @@ int main(void){
 /* ============================================================= */
 /*                          MAIN GAME                            */
 /* ============================================================= */
+
+
+
+// Call this to reset the game state before replay
+
+void Reset_Game(void)
+{
+    game_status = 1;
+    game_seconds_count = 0;
+    game_last_tick = 0;
+    game_blink_tick = 0;
+    game_led_state = 0;
+    game_initialized = 0;
+    game_calibrated = 0;
+    game_over_msg_sent = 0;
+}
+
+// Call this repeatedly in main when currentGame == 1
+void RedLightGreenLight(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    if (game_status == 0)
+    {
+        // Send game over instructions once
+        if (!game_over_msg_sent) {
+            UART_Send("Game Over\r\n");
+            UART_Send("Press double button slowly to replay. Press double button rapidly to switch.\r\n");
+            game_over_msg_sent = 1;
+        }
+        return; // Do nothing more until reset
+    }
+
+    if (!game_initialized)
+    {
+        UART_Send("Entering Red Light, Green Light as Player \r\n");
+        game_last_tick = now;
+        game_initialized = 2;  // Waiting 5 seconds before green light
+        BSP_LED_Off(LED2);
+        return;
+    }
+
+    if (game_initialized == 2)
+    {
+        if (now - game_last_tick >= 5000)
+        {
+            UART_Send(" Green Light! \r\n");
+            game_seconds_count = 1;
+            game_last_tick = now;
+            game_initialized = 1;
+            BSP_LED_On(LED2);
+        }
+        return;
+    }
+
+    if (game_initialized != 1)
+    {
+        return;
+    }
+
+    if (game_seconds_count <= 10)
+    {
+        // Green light phase
+        if (now - game_last_tick >= 1000)
+        {
+            game_last_tick = now;
+            char msg[100];
+            sprintf(msg, "\r\n %d: Green Light. Can Move \r\n", game_seconds_count);
+            UART_Send(msg);
+
+            if (game_seconds_count % 2 == 0)
+            {
+                float temp_data = BSP_TSENSOR_ReadTemp();
+                float hum_data = BSP_HSENSOR_ReadHumidity();
+                float pres_data = BSP_PSENSOR_ReadPressure();
+                sprintf(msg, " Temperature: %f \r\n Humidity: %f \r\n Pressure: %f \r\n", temp_data, hum_data, pres_data);
+                UART_Send(msg);
+            }
+            game_seconds_count++;
+        }
+        BSP_LED_On(LED2);
+    }
+    else if (game_seconds_count == 11 && !game_calibrated)
+    {
+        // Calibrate sensors just after green light
+        int16_t accel_const_i16[3] = {0};
+        int16_t gyro_const_i16[3] = {0};
+
+        BSP_ACCELERO_AccGetXYZ(accel_const_i16);
+        accel_const[0] = (float)accel_const_i16[0] * (9.8 / 1000.0f);
+        accel_const[1] = (float)accel_const_i16[1] * (9.8 / 1000.0f);
+        accel_const[2] = (float)accel_const_i16[2] * (9.8 / 1000.0f);
+
+        BSP_GYRO_GetXYZ(gyro_const_i16);
+        gyro_const[0] = (float)gyro_const_i16[0] * (35 / 1000.0f);
+        gyro_const[1] = (float)gyro_const_i16[1] * (35 / 1000.0f);
+        gyro_const[2] = (float)gyro_const_i16[2] * (35 / 1000.0f);
+
+        sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_const[0], accel_const[1], accel_const[2]);
+        UART_Send(msg);
+        sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_const[0], gyro_const[1], gyro_const[2]);
+        UART_Send(msg);
+
+        game_calibrated = 1;
+        game_last_tick = now;
+        BSP_LED_Off(LED2);
+    }
+    else if (game_seconds_count >= 11 && game_seconds_count <= 20)
+    {
+    	ssd1306_TestRedLight();
+        // Red Light phase (blink LED and check motion)
+        if (now - game_blink_tick >= 500)
+        {
+            game_blink_tick = now;
+            if (game_led_state)
+            {
+                BSP_LED_Off(LED2);
+                game_led_state = 0;
+            }
+            else
+            {
+                BSP_LED_On(LED2);
+                game_led_state = 1;
+            }
+        }
+
+        if (now - game_last_tick >= 1000)
+        {
+            game_last_tick = now;
+            char msg[200];
+            sprintf(msg, "\r\n %d: Red Light. Cannot Move \r\n", game_seconds_count - 10);
+            UART_Send(msg);
+
+            if (game_seconds_count % 2 == 0)
+            {
+                int16_t accel_data_i16[3] = {0};
+                float accel_data[3] = {0};
+                BSP_ACCELERO_AccGetXYZ(accel_data_i16);
+                accel_data[0] = (float)accel_data_i16[0] * (9.8 / 1000.0f);
+                accel_data[1] = (float)accel_data_i16[1] * (9.8 / 1000.0f);
+                accel_data[2] = (float)accel_data_i16[2] * (9.8 / 1000.0f);
+
+                int16_t gyro_data_i16[3] = {0};
+                float gyro_data[3] = {0};
+                BSP_GYRO_GetXYZ(gyro_data_i16);
+                gyro_data[0] = (float)gyro_data_i16[0] * (35 / 1000.0f);
+                gyro_data[1] = (float)gyro_data_i16[1] * (35 / 1000.0f);
+                gyro_data[2] = (float)gyro_data_i16[2] * (35 / 1000.0f);
+
+                sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
+                UART_Send(msg);
+                sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_data[0], gyro_data[1], gyro_data[2]);
+                UART_Send(msg);
+
+                if (fabs(accel_data[0] - accel_const[0]) >= 0.5f ||
+                    fabs(accel_data[1] - accel_const[1]) >= 0.5f ||
+                    fabs(accel_data[2] - accel_const[2]) >= 0.5f ||
+                    fabs(gyro_data[0] - gyro_const[0]) >= 10.0f ||
+                    fabs(gyro_data[1] - gyro_const[1]) >= 10.0f ||
+                    fabs(gyro_data[2] - gyro_const[2]) >= 10.0f)
+                {
+                    game_status = 0;  // Set game over
+                }
+            }
+            game_seconds_count++;
+        }
+    }
+    else
+    {
+        game_status = 0; // Game over if time exceeds expected
+    }
+}
+
+
+
 void CatchAndRun(void)
 {
     uint8_t detected = 0;
     uint32_t detectStart = 0;
     uint8_t game_over = 0;
-    uint8_t cooldown_active = 0;
-    uint32_t cooldownStart = 0;
 
     //sprintf(msg, "Entering Catch And Run as %s\r\n", (role == ROLE_PLAYER) ? "Player" : "Enforcer");
     UART_Send("Entering Catch And Run as Player\r\n");
@@ -232,7 +432,7 @@ float Read_Magnetometer(void)
 // UART printing helper
 void UART_Send(char *msg)
 {
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 20);
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 0xFF);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -249,33 +449,27 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float pressure = BSP_PSENSOR_ReadPressure();
 
 		if (temperature > 35.0f) {
-			char msg[100];
-			sprintf(msg, "Temperature spike detected! T:%.1fC. Dangerous environment!\r\n", temperature);
+			sprintf(msg, "Temperature spike detected! T:%fC. Dangerous environment!\r\n", temperature);
 			UART_Send(msg);
 		}
 		else if (temperature < 5.0f) {
-			char msg[100];
-			sprintf(msg, "Temperature drop detected! T:%.1fC. Dangerous environment!\r\n", temperature);
+			sprintf(msg, "Temperature drop detected! T:%fC. Dangerous environment!\r\n", temperature);
 			UART_Send(msg);
 		}
 		if (humidity > 75.0f) {
-			char msg[100];
-			sprintf(msg, "High humidity! %f%. Heat stroke risk!\r\n", humidity);
+			sprintf(msg, "High humidity! %f. Heat stroke risk!\r\n", humidity);
 			UART_Send(msg);
 		}
 		else if (humidity < 30.0f) {
-			char msg[100];
-			sprintf(msg, "Low humidity! %f%. Dehydration risk!\r\n", humidity);
+			sprintf(msg, "Low humidity! %f. Dehydration risk!\r\n", humidity);
 			UART_Send(msg);
 		}
 		if (pressure < 950.0f) {
-			   char msg[100];
-			   sprintf(msg, "Low pressure! %.1f hPa. Risk of dizziness!\r\n", pressure);
+			   sprintf(msg, "Low pressure! %f hPa. Risk of dizziness!\r\n", pressure);
 			   UART_Send(msg);
 		}
 		else if (pressure > 1050.0f) {
-			char msg[100];
-			sprintf(msg, "High pressure! %.1f hPa. Risk of headache!\r\n", pressure);
+			sprintf(msg, "High pressure! %f hPa. Risk of headache!\r\n", pressure);
 			UART_Send(msg);
 		}
 
@@ -285,38 +479,49 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-	   if (GPIO_Pin == BUTTON_EXTI13_Pin)
-	    {
-	        uint32_t now = HAL_GetTick();
+   if (GPIO_Pin == BUTTON_EXTI13_Pin)
+    {
+        uint32_t now = HAL_GetTick();
 
-	        // --- Debounce (ignore within 50 ms) ---
-	        static uint32_t debounce_time = 0;
-	        if (now - debounce_time < 50)
-	            return;
-	        debounce_time = now;
+        // --- Debounce (ignore within 50 ms) ---
+        static uint32_t debounce_time = 0;
+        if (now - debounce_time < 50)
+            return;
+        debounce_time = now;
 
-	        // --- Double-press detection ---
-	        if (press_pending && (now - last_press_time <= 1000))
-	        {
-	            // second press within 1 s → double press so switch game
-	            currentGame ^= 1;
-	            // clear pending press
-	            press_pending = 0;
-	        }
-	        // add an && (now - last_press_time > 1000) if you want different variations of double press (rapid and slow)
-	        else if (press_pending && (now - last_press_time > 1000)){
-	        	//only one press
-	        	double_press_slow = 1;
-	        	press_pending = 0;
-	        }
-	        else
-	        {
-	            // start waiting for second press
-	            last_press_time = now;
-	            press_pending = 1;
-	        }
-	    }
+        // --- Double-press detection ---
+        if (press_pending && (now - last_press_time <= 1000))
+        {
+            // second press within 1 s → double press so switch game mode
+            currentGame ^= 1;
+            press_pending = 0;
 
+            // Reset game states on switching to Red Light Green Light mode
+            if (currentGame == 1) {
+                Reset_Game();
+            }
+
+        }
+        else if (press_pending && (now - last_press_time > 1000) && (now - last_press_time <= 5000)){
+            // slow double press → replay current game
+            double_press_slow = 1;
+            press_pending = 0;
+
+            if (currentGame == 1) {
+                Reset_Game();
+            }
+            // Reset CatchAndRun similarly if needed
+        }
+        else if (press_pending && (now - last_press_time > 5000)){
+                   press_pending = 0;
+
+               }
+        else
+        {
+            last_press_time = now;
+            press_pending = 1;
+        }
+    }
 }
 
 static void MX_GPIO_Init(void)
@@ -387,7 +592,7 @@ static void UART1_Init(void){
 	__HAL_RCC_USART1_CLK_ENABLE();
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
 	GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
-	GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_6;
+	GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -406,6 +611,37 @@ static void UART1_Init(void){
 	if (HAL_UART_Init(&huart1) != HAL_OK) {
 		while(1);
 	}
+}
+
+static void I2C1_Init(void)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // I2C Pins (PB8=SCL, PB9=SDA)
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    __HAL_RCC_I2C1_CLK_ENABLE();
+
+    hi2c1.Instance = I2C1;
+    hi2c1.Init.Timing = 0x10909CEC;  // Example timing for 100kHz at 80MHz
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    {
+        while(1);
+    }
 }
 
 void SystemClock_Config(void)
@@ -478,4 +714,3 @@ void Error_Handler(void)
   {
   }
 }
-
