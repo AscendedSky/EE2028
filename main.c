@@ -184,6 +184,7 @@ void RedLightGreenLight(void)
             game_last_tick = now;
             game_initialized = 1;
             BSP_LED_On(LED2);
+
         }
         return;
     }
@@ -202,6 +203,9 @@ void RedLightGreenLight(void)
             char msg[100];
             sprintf(msg, "\r\n %d: Green Light. Can Move \r\n", game_seconds_count);
             UART_Send(msg);
+            ssd1306_Fill(Black);
+            ssd1306_SetCursor(0,20);
+            ssd1306_TestGreenLight();
 
             if (game_seconds_count % 2 == 0)
             {
@@ -242,6 +246,8 @@ void RedLightGreenLight(void)
     }
     else if (game_seconds_count >= 11 && game_seconds_count <= 20)
     {
+    	ssd1306_Fill(Black);
+    	ssd1306_SetCursor(0,20);
     	ssd1306_TestRedLight();
         // Red Light phase (blink LED and check motion)
         if (now - game_blink_tick >= 500)
@@ -295,6 +301,12 @@ void RedLightGreenLight(void)
                     fabs(gyro_data[2] - gyro_const[2]) >= 10.0f)
                 {
                     game_status = 0;  // Set game over
+                    ssd1306_Fill(Black);
+                    ssd1306_SetCursor(0,20);
+                    ssd1306_WriteString("You Moved", Font_7x10, White);
+                    ssd1306_SetCursor(0,40);
+                    ssd1306_WriteString("Game Over", Font_7x10, White);
+                    ssd1306_UpdateScreen();
                 }
             }
             game_seconds_count++;

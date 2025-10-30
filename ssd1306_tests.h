@@ -12,6 +12,7 @@ void ssd1306_TestFPS(void);
 void ssd1306_TestAll(void);
 void ssd1306_TestLine(void);
 void ssd1306_TestRedLight(void);
+void ssd1306_TestGreenLight(void);
 void ssd1306_TestRectangleFill(void);
 void ssd1306_TestRectangleInvert(void);
 void ssd1306_TestCircle(void);
