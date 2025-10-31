@@ -24,25 +24,22 @@
 #include"ssd1306_fonts.h"
 
 
-/* --- Peripheral Handles --- */
+/* --- Handles --- */
 UART_HandleTypeDef huart1;
 TIM_HandleTypeDef htim16;
 TIM_HandleTypeDef htim17;
+DMA_HandleTypeDef hdma_usart1_tx;
 I2C_HandleTypeDef hi2c1;
+ADC_HandleTypeDef hadc1;
 
 
-/* --- Role Configuration --- */
-#define ROLE_PLAYER      1
-#define ROLE_ENFORCER    2
-uint8_t role = ROLE_PLAYER;   // Change manually for now
+uint8_t role = 1;   // Change manually (1 - Player, 0 - Enforcer)
 
-
-/* --- Thresholds and Timing Game 2--- */
-#define MAG_THRESHOLD     400.0f      // Example proximity threshold
-#define PROXIMITY_THRESHOLD 100.0f
-#define ESCAPE_WINDOW_MS  3000        // 3-second reaction time window
-#define COOLDOWN_MS 3000
-
+//Global static variables for Catch and Run
+static const float mag_threshold = 350.0f;
+static const float proximity_threshold = 100.0f;
+static const uint16_t escape_window_ms = 3000; // 3-second reaction time window
+static const uint16_t cooldown_ms = 3000;
 // Global static variables for Red Light Green Light
 static int game_status = 1;
 static int game_seconds_count = 0;
@@ -52,19 +49,20 @@ static uint8_t game_led_state = 0;
 static uint8_t game_initialized = 0;  // 0 = not started, 1 = playing, 2 = waiting before start
 static uint8_t game_calibrated = 0;
 static uint8_t game_over_msg_sent = 0;  // Flag for sending game over message once
-
 static float accel_const[3] = {0};
 static float gyro_const[3] = {0};
+static uint16_t soundThreshold = 0;
 
 
 /* --- Pins --- */
-#define BUZZER_PIN         GPIO_PIN_14
+#define BUZZER_PIN         GPIO_PIN_14 // D2 (PD14)
 #define BUZZER_PORT        GPIOD
+#define SOUND_SENSOR_PIN   GPIO_PIN_3   // A2 (PC3)
+#define SOUND_SENSOR_PORT  GPIOC
 
-/* --- Function Prototypes --- */
+
 float Read_Magnetometer(void);
 void UART_Send(char *msg);
-uint8_t Button_Pressed(void);
 void CatchAndRun(void);
 void RedLightGreenLight(void);
 static void UART1_Init(void);
@@ -72,26 +70,28 @@ static void MX_GPIO_Init(void);
 void SystemClock_Config(void);
 static void MX_TIM16_Init(void);
 static void MX_TIM17_Init(void);
+static void MX_DMA_Init(void);
 static void I2C1_Init(void);
+static void MX_ADC1_Init(void);
 
-/* --- Misc variables --- */
-char msg[100]; //message variable declaration
-
-//uint8_t paused = 0;              // 0 = running, 1 = paused
+//Misc variables
+char msg[256]; //message variable declaration
 uint32_t last_press_time = 0;    // last button press time (ms)
 uint8_t press_pending = 0;       // 1 if a single press waiting for possible double
 uint8_t double_press_slow = 0;
-volatile uint8_t currentGame = 0; //0 for catcha nd run, 1 for red light green light
+volatile uint8_t currentGame = 0; //0 for catch and run, 1 for red light green light
 volatile uint8_t buzzer_active = 0;
 
 
 int main(void){
 	HAL_Init();
 	SystemClock_Config(); //NOTE: ALWAYS INTIALIZE THE SYSTEM CLOCK AFTER HAL
-    UART1_Init();
     MX_GPIO_Init();
+    MX_ADC1_Init();
     MX_TIM16_Init();
     MX_TIM17_Init();
+    MX_DMA_Init();
+    UART1_Init();
 	BSP_LED_Init(LED2);
 	BSP_MAGNETO_Init();
     BSP_ACCELERO_Init();
@@ -99,26 +99,19 @@ int main(void){
     BSP_HSENSOR_Init();
     BSP_TSENSOR_Init();
     BSP_PSENSOR_Init();
-    HAL_TIM_Base_Start_IT(&htim16);
-    HAL_TIM_Base_Start_IT(&htim17);
     I2C1_Init();
     ssd1306_Init();
+    HAL_TIM_Base_Start_IT(&htim16);
+    HAL_TIM_Base_Start_IT(&htim17);
 
-    /*
-    while (1){
-    	float magValue = Read_Magnetometer();
-    	char msg[50];
-    	sprintf(msg, "Magnetometer: %.2f uT\r\n", magValue);
-    	UART_Send(msg);
-    	HAL_Delay(1000);
-    }*/
+
     ssd1306_Fill(Black);  // Clear display buffer
-        	ssd1306_SetCursor(0,32);
-        	ssd1306_WriteString("Welcome to EE2028 (It has not been fun)", Font_7x10, White);
-        	ssd1306_UpdateScreen();
-        	HAL_Delay(2000);
-        	ssd1306_Fill(Black);
-        	ssd1306_UpdateScreen();
+    ssd1306_SetCursor(0,32);
+    ssd1306_Fill(Black);
+    ssd1306_WriteString("Welcome to EE2028 (It has not been fun)", Font_7x10, White);
+    ssd1306_UpdateScreen();
+    HAL_Delay(2000);
+    ssd1306_UpdateScreen();
     while (1){
     	if (currentGame){
     		RedLightGreenLight();
@@ -129,12 +122,6 @@ int main(void){
 
     }
 }
-
-/* ============================================================= */
-/*                          MAIN GAME                            */
-/* ============================================================= */
-
-
 
 // Call this to reset the game state before replay
 
@@ -163,6 +150,18 @@ void RedLightGreenLight(void)
             UART_Send("Press double button slowly to replay. Press double button rapidly to switch.\r\n");
             game_over_msg_sent = 1;
         }
+
+        if (double_press_slow) {
+                   double_press_slow = 0;
+                   game_status = 1;             // reset game status
+                   game_initialized = 0;        // reinitialize game
+                   game_seconds_count = 0;
+                   game_calibrated = 0;
+                   game_over_msg_sent = 0;
+                   BSP_LED_Off(LED2);
+                   UART_Send("Replaying Red Light Green Light!\r\n");
+                   return;  // restart loop
+               }
         return; // Do nothing more until reset
     }
 
@@ -235,9 +234,17 @@ void RedLightGreenLight(void)
         gyro_const[1] = (float)gyro_const_i16[1] * (35 / 1000.0f);
         gyro_const[2] = (float)gyro_const_i16[2] * (35 / 1000.0f);
 
+        // Sound value read to get noise threshold
+        HAL_ADC_Start(&hadc1);
+        HAL_ADC_PollForConversion(&hadc1, 20);
+        uint16_t soundThreshold = HAL_ADC_GetValue(&hadc1);
+
         sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_const[0], accel_const[1], accel_const[2]);
         UART_Send(msg);
         sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_const[0], gyro_const[1], gyro_const[2]);
+        UART_Send(msg);
+
+        sprintf(msg, "\r\n Sound Value: %d \r\n", soundThreshold);
         UART_Send(msg);
 
         game_calibrated = 1;
@@ -288,17 +295,27 @@ void RedLightGreenLight(void)
                 gyro_data[1] = (float)gyro_data_i16[1] * (35 / 1000.0f);
                 gyro_data[2] = (float)gyro_data_i16[2] * (35 / 1000.0f);
 
+                //read sound values in red light
+                HAL_ADC_Start(&hadc1);
+                HAL_ADC_PollForConversion(&hadc1, 20);
+                uint16_t soundValue = HAL_ADC_GetValue(&hadc1);
+
                 sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
                 UART_Send(msg);
                 sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_data[0], gyro_data[1], gyro_data[2]);
                 UART_Send(msg);
+
+                sprintf(msg, "\r\n Sound Value: %d \r\n", soundValue);
+                UART_Send(msg);
+
 
                 if (fabs(accel_data[0] - accel_const[0]) >= 0.5f ||
                     fabs(accel_data[1] - accel_const[1]) >= 0.5f ||
                     fabs(accel_data[2] - accel_const[2]) >= 0.5f ||
                     fabs(gyro_data[0] - gyro_const[0]) >= 10.0f ||
                     fabs(gyro_data[1] - gyro_const[1]) >= 10.0f ||
-                    fabs(gyro_data[2] - gyro_const[2]) >= 10.0f)
+                    fabs(gyro_data[2] - gyro_const[2]) >= 10.0f ||
+					soundThreshold - soundValue >= 500)
                 {
                     game_status = 0;  // Set game over
                     ssd1306_Fill(Black);
@@ -325,9 +342,14 @@ void CatchAndRun(void)
     uint8_t detected = 0;
     uint32_t detectStart = 0;
     uint8_t game_over = 0;
+    uint32_t cooldownStart = 0;
 
-    //sprintf(msg, "Entering Catch And Run as %s\r\n", (role == ROLE_PLAYER) ? "Player" : "Enforcer");
-    UART_Send("Entering Catch And Run as Player\r\n");
+    if (role){
+    	UART_Send("Entering Catch And Run as Player\r\n");
+    }
+    else{
+    	UART_Send("Entering Catch And Run as Enforcer\r\n");
+    }
     while (!currentGame)
     {
     	if (double_press_slow && game_over){
@@ -341,28 +363,29 @@ void CatchAndRun(void)
     	}
         float magValue = Read_Magnetometer();
         // Blink LED faster when proximity increases
-        if (magValue > 5 * PROXIMITY_THRESHOLD){
+        if (magValue > 4.5 * proximity_threshold){
 
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 999);
+        	__HAL_TIM_SET_AUTORELOAD(&htim16, 399);
+        }
+        else if (magValue >= 4 * proximity_threshold){
+        	__HAL_TIM_SET_AUTORELOAD(&htim16, 799);
 
         }
-        else if (magValue > 4 * PROXIMITY_THRESHOLD){
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 1999);
-
+        else if (magValue >= 3.5 * proximity_threshold){
+        	__HAL_TIM_SET_AUTORELOAD(&htim16, 1199);
         }
-        else if (magValue > 3 * PROXIMITY_THRESHOLD){
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 3999);
-
+        else if (magValue >= 3 * proximity_threshold){
+            __HAL_TIM_SET_AUTORELOAD(&htim16, 3999);
         }
         else{
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 7999);
+        	__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
 
         }
 
 
 
-        // --- Detect proximity event ---
-        if (magValue > MAG_THRESHOLD && !detected)
+        // Detect proximity event
+        if (magValue > mag_threshold && !detected && (HAL_GetTick() - cooldownStart > cooldown_ms))
         {
         	press_pending = 0; // to clear out preempted presses.
         	buzzer_active = 1;
@@ -370,13 +393,13 @@ void CatchAndRun(void)
             detectStart = HAL_GetTick();
 
 
-            if (role == ROLE_PLAYER)
+            if (role)
             	UART_Send("Enforcer nearby! Be careful.\r\n");
             else
                 UART_Send("Player is nearby! Move faster.\r\n");
         }
 
-        // --- While detected ---
+        // While detected
         if (detected)
         {
             uint32_t elapsed = HAL_GetTick() - detectStart;
@@ -384,14 +407,15 @@ void CatchAndRun(void)
 
 
             // Check for player/enforcer action (button press)
-            if (elapsed <= ESCAPE_WINDOW_MS)
+            if (elapsed <= escape_window_ms)
             {
                 if (press_pending)
                 {
                 	press_pending = 0;
                 	detected = 0;
                 	buzzer_active = 0;
-                    if (role == ROLE_PLAYER){
+                	cooldownStart = HAL_GetTick();
+                    if (role){
                     	UART_Send("Player escaped, good job!\r\n");
                     }
                     else{
@@ -399,7 +423,8 @@ void CatchAndRun(void)
                         UART_Send("Player captured, good job!\r\n");
                     	game_over = 1;
                     	UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
-                    	__HAL_TIM_SET_AUTORELOAD(&htim16, 7999);
+                    	__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
+                    	BSP_LED_Off(LED2);
                     }
 
                 }
@@ -410,9 +435,9 @@ void CatchAndRun(void)
             	game_over = 1;
             	press_pending = 0;
             	buzzer_active = 0;
-            	if (role == ROLE_PLAYER){
+            	if (role){
             		UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
-            		__HAL_TIM_SET_AUTORELOAD(&htim16, 7999);
+            		__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
             	}
                 else{
                 	UART_Send("Player escaped! Keep trying.\r\n");
@@ -429,7 +454,6 @@ void CatchAndRun(void)
 /*                      HELPER FUNCTIONS                         */
 /* ============================================================= */
 
-//
 float Read_Magnetometer(void)
 {
 	int16_t mag_data[3] = {0};
@@ -444,7 +468,12 @@ float Read_Magnetometer(void)
 // UART printing helper
 void UART_Send(char *msg)
 {
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 0xFF);
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 20);
+}
+
+void UART_Send_DMA(char *msg)
+{
+    HAL_UART_Transmit_DMA(&huart1, (uint8_t*)msg, strlen(msg));
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -460,30 +489,50 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float humidity = BSP_HSENSOR_ReadHumidity();
 		float pressure = BSP_PSENSOR_ReadPressure();
 
-		if (temperature > 35.0f) {
-			sprintf(msg, "Temperature spike detected! T:%fC. Dangerous environment!\r\n", temperature);
-			UART_Send(msg);
-		}
-		else if (temperature < 5.0f) {
-			sprintf(msg, "Temperature drop detected! T:%fC. Dangerous environment!\r\n", temperature);
-			UART_Send(msg);
-		}
-		if (humidity > 75.0f) {
-			sprintf(msg, "High humidity! %f. Heat stroke risk!\r\n", humidity);
-			UART_Send(msg);
-		}
-		else if (humidity < 30.0f) {
-			sprintf(msg, "Low humidity! %f. Dehydration risk!\r\n", humidity);
-			UART_Send(msg);
-		}
-		if (pressure < 950.0f) {
-			   sprintf(msg, "Low pressure! %f hPa. Risk of dizziness!\r\n", pressure);
-			   UART_Send(msg);
-		}
-		else if (pressure > 1050.0f) {
-			sprintf(msg, "High pressure! %f hPa. Risk of headache!\r\n", pressure);
-			UART_Send(msg);
-		}
+
+		//char msg1[512];
+	    msg[0] = '\0'; // Initialize empty string
+	    char temp_msg[100]; // Temporary buffer
+
+	    // Temperature checks
+	    if (temperature > 35.0f) {
+	        //char temp_msg[100];
+	        sprintf(temp_msg, "Temperature spike detected! T:%.1fC. Dangerous environment!\r\n", temperature);
+	        strcat(msg, temp_msg);
+	    } else if (temperature < 5.0f) {
+	        //char temp_msg[100];
+	        sprintf(temp_msg, "Temperature drop detected! T:%.1fC. Dangerous environment!\r\n", temperature);
+	        strcat(msg, temp_msg);
+	    }
+
+	    // Humidity checks
+	    if (humidity > 75.0f) {
+	        //char hum_msg[100];
+	        sprintf(temp_msg, "High humidity! %.1f%%. Heat stroke risk!\r\n", humidity);
+	        strcat(msg, temp_msg);
+	    } else if (humidity < 30.0f) {
+	        //char hum_msg[100];
+	        sprintf(temp_msg, "Low humidity! %.1f%%. Dehydration risk!\r\n", humidity);
+	        strcat(msg, temp_msg);
+	    }
+
+	    // Pressure checks
+	    if (pressure < 950.0f) {
+	        //char pres_msg[100];
+	        sprintf(temp_msg, "Low pressure! %.1f hPa. Risk of dizziness!\r\n", pressure);
+	        strcat(msg, temp_msg);
+	    } else if (pressure > 1050.0f) {
+	        //char pres_msg[100];
+	        sprintf(temp_msg, "High pressure! %.1f hPa. Risk of headache!\r\n", pressure);
+	        strcat(msg, temp_msg);
+	    }
+
+	    // Send all messages in a single DMA transmission
+
+	    // Send all messages in a single DMA transmission
+	    if (strlen(msg) > 0) {
+	        UART_Send_DMA(msg);
+	    }
 
     }
 
@@ -491,49 +540,39 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-   if (GPIO_Pin == BUTTON_EXTI13_Pin)
-    {
-        uint32_t now = HAL_GetTick();
+	   if (GPIO_Pin == BUTTON_EXTI13_Pin)
+	    {
+	        uint32_t now = HAL_GetTick();
 
-        // --- Debounce (ignore within 50 ms) ---
-        static uint32_t debounce_time = 0;
-        if (now - debounce_time < 50)
-            return;
-        debounce_time = now;
+	        // --- Debounce (ignore within 50 ms) ---
+	        static uint32_t debounce_time = 0;
+	        if (now - debounce_time < 50)
+	            return;
+	        debounce_time = now;
 
-        // --- Double-press detection ---
-        if (press_pending && (now - last_press_time <= 1000))
-        {
-            // second press within 1 s → double press so switch game mode
-            currentGame ^= 1;
-            press_pending = 0;
+	        // --- Double-press detection ---
+	        if (press_pending && (now - last_press_time <= 1000))
+	        {
+	            // second press within 1 s → double press so switch game
+	            currentGame ^= 1;
+	            // clear pending press
+	            press_pending = 0;
+	            Reset_Game(); //for resetting game 1 variables
+	        }
+	        // add an && (now - last_press_time > 1000) if you want different variations of double press (rapid and slow)
+	        else if (press_pending && (now - last_press_time > 1000)){
+	        	//only one press
+	        	double_press_slow = 1;
+	        	press_pending = 0;
+	        }
+	        else
+	        {
+	            // start waiting for second press
+	            last_press_time = now;
+	            press_pending = 1;
+	        }
+	    }
 
-            // Reset game states on switching to Red Light Green Light mode
-            if (currentGame == 1) {
-                Reset_Game();
-            }
-
-        }
-        else if (press_pending && (now - last_press_time > 1000) && (now - last_press_time <= 5000)){
-            // slow double press → replay current game
-            double_press_slow = 1;
-            press_pending = 0;
-
-            if (currentGame == 1) {
-                Reset_Game();
-            }
-            // Reset CatchAndRun similarly if needed
-        }
-        else if (press_pending && (now - last_press_time > 5000)){
-                   press_pending = 0;
-
-               }
-        else
-        {
-            last_press_time = now;
-            press_pending = 1;
-        }
-    }
 }
 
 static void MX_GPIO_Init(void)
@@ -566,7 +605,7 @@ static void MX_TIM16_Init(void){
 	htim16.Instance = TIM16;
 	htim16.Init.Prescaler = 29999;
 	htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim16.Init.Period = 7999;
+	htim16.Init.Period = 59999;
 	htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim16.Init.RepetitionCounter = 0;
 	htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -604,7 +643,7 @@ static void UART1_Init(void){
 	__HAL_RCC_USART1_CLK_ENABLE();
 	GPIO_InitTypeDef GPIO_InitStruct = {0};
 	GPIO_InitStruct.Alternate = GPIO_AF7_USART1;
-	GPIO_InitStruct.Pin = GPIO_PIN_6|GPIO_PIN_7;
+	GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_6;
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -620,9 +659,63 @@ static void UART1_Init(void){
 	huart1.Init.OverSampling = UART_OVERSAMPLING_16;
 	huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
 	huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-	if (HAL_UART_Init(&huart1) != HAL_OK) {
-		while(1);
+	hdma_usart1_tx.Instance = DMA1_Channel4;
+	hdma_usart1_tx.Init.Request = DMA_REQUEST_USART1_TX;
+	hdma_usart1_tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
+	hdma_usart1_tx.Init.PeriphInc = DMA_PINC_DISABLE;
+	hdma_usart1_tx.Init.MemInc = DMA_MINC_ENABLE;
+	hdma_usart1_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+	hdma_usart1_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+	hdma_usart1_tx.Init.Mode = DMA_NORMAL;
+	hdma_usart1_tx.Init.Priority = DMA_PRIORITY_LOW;
+	if (HAL_DMA_Init(&hdma_usart1_tx) != HAL_OK){
+	      Error_Handler();
 	}
+	__HAL_LINKDMA(&huart1,hdmatx,hdma_usart1_tx);
+	if (HAL_UART_Init(&huart1) != HAL_OK){
+	   Error_Handler();
+	 }
+	if (HAL_UARTEx_SetTxFifoThreshold(&huart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK){
+	   Error_Handler();
+	 }
+	if (HAL_UARTEx_SetRxFifoThreshold(&huart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK){
+	    Error_Handler();
+	  }
+	  if (HAL_UARTEx_DisableFifoMode(&huart1) != HAL_OK){
+	    Error_Handler();
+	  }
+
+}
+static void MX_ADC1_Init(void)
+{
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  __HAL_RCC_ADC_CLK_ENABLE();     // <-- Make sure ADC clock is on
+  __HAL_RCC_GPIOC_CLK_ENABLE();   // <-- Make sure GPIO clock is on
+
+  // Configure PC3 as analog input
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG_ADC_CONTROL;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  HAL_ADC_Init(&hadc1);
+
+  sConfig.Channel = ADC_CHANNEL_4; // PC3 (A2)
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES_5;
+  HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 }
 
 static void I2C1_Init(void)
@@ -711,6 +804,22 @@ void SystemClock_Config(void)
   */
   HAL_RCCEx_EnableMSIPLLMode();
 }
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMAMUX1_CLK_ENABLE();
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 3, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+  /* DMAMUX1_OVR_IRQn interrupt configuration */
+  //HAL_NVIC_SetPriority(DMAMUX1_OVR_IRQn, 3, 1);
+  //HAL_NVIC_EnableIRQ(DMAMUX1_OVR_IRQn);
+
+}
 void TIM1_UP_TIM16_IRQHandler(void)
 {
     HAL_TIM_IRQHandler(&htim16);
@@ -718,6 +827,18 @@ void TIM1_UP_TIM16_IRQHandler(void)
 void TIM1_TRG_COM_TIM17_IRQHandler(void)
 {
   HAL_TIM_IRQHandler(&htim17);
+}
+
+void DMA1_Channel4_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_usart1_tx);
+  if (huart1.gState == HAL_UART_STATE_BUSY_TX)
+      {
+          huart1.gState = HAL_UART_STATE_READY;
+
+          // Call TX complete callback manually (optional)
+          HAL_UART_TxCpltCallback(&huart1);
+      }
 }
 void Error_Handler(void)
 {
