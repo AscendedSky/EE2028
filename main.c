@@ -45,7 +45,7 @@ static int game_status = 1;
 static int game_seconds_count = 0;
 static uint32_t game_last_tick = 0;
 static uint32_t game_blink_tick = 0;
-static uint8_t game_led_state = 0;
+volatile uint8_t game_led_state = 0;
 static uint8_t game_initialized = 0;  // 0 = not started, 1 = playing, 2 = waiting before start
 static uint8_t game_calibrated = 0;
 static uint8_t game_over_msg_sent = 0;  // Flag for sending game over message once
@@ -79,7 +79,7 @@ char msg[256]; //message variable declaration
 uint32_t last_press_time = 0;    // last button press time (ms)
 uint8_t press_pending = 0;       // 1 if a single press waiting for possible double
 uint8_t double_press_slow = 0;
-volatile uint8_t currentGame = 0; //0 for catch and run, 1 for red light green light
+volatile uint8_t currentGame = 1; //0 for catch and run, 1 for red light green light
 volatile uint8_t buzzer_active = 0;
 
 
@@ -113,6 +113,21 @@ int main(void){
     HAL_Delay(2000);
     ssd1306_UpdateScreen();
     while (1){
+        static uint8_t lastGame = 2;
+        if (currentGame != lastGame) {
+            lastGame = currentGame;
+            if (currentGame){
+                UART_Send("Entering Red Light, Green Light as Player\r\n");
+            }
+            else{
+            	if (role){
+            		UART_Send("Entering Catch And Run as Player\r\n");
+            	}
+            	else{
+            		UART_Send("Entering Catch And Run as Enforcer\r\n");
+            	}
+            }
+        }
     	if (currentGame){
     		RedLightGreenLight();
         }
@@ -167,7 +182,6 @@ void RedLightGreenLight(void)
 
     if (!game_initialized)
     {
-        UART_Send("Entering Red Light, Green Light as Player \r\n");
         game_last_tick = now;
         game_initialized = 2;  // Waiting 5 seconds before green light
         BSP_LED_Off(LED2);
@@ -230,9 +244,9 @@ void RedLightGreenLight(void)
         accel_const[2] = (float)accel_const_i16[2] * (9.8 / 1000.0f);
 
         BSP_GYRO_GetXYZ(gyro_const_i16);
-        gyro_const[0] = (float)gyro_const_i16[0] * (35 / 1000.0f);
-        gyro_const[1] = (float)gyro_const_i16[1] * (35 / 1000.0f);
-        gyro_const[2] = (float)gyro_const_i16[2] * (35 / 1000.0f);
+        gyro_const[0] = (float)gyro_const_i16[0] / 1000.0f;
+        gyro_const[1] = (float)gyro_const_i16[1] / 1000.0f;
+        gyro_const[2] = (float)gyro_const_i16[2] / 1000.0f;
 
         // Sound value read to get noise threshold
         HAL_ADC_Start(&hadc1);
@@ -343,13 +357,9 @@ void CatchAndRun(void)
     uint32_t detectStart = 0;
     uint8_t game_over = 0;
     uint32_t cooldownStart = 0;
+    uint32_t newARR = 59999;
 
-    if (role){
-    	UART_Send("Entering Catch And Run as Player\r\n");
-    }
-    else{
-    	UART_Send("Entering Catch And Run as Enforcer\r\n");
-    }
+    game_led_state = 1;
     while (!currentGame)
     {
     	if (double_press_slow && game_over){
@@ -364,22 +374,27 @@ void CatchAndRun(void)
         float magValue = Read_Magnetometer();
         // Blink LED faster when proximity increases
         if (magValue > 4.5 * proximity_threshold){
-
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 399);
+        	newARR = 399;
         }
         else if (magValue >= 4 * proximity_threshold){
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 799);
-
+        	newARR = 799;
         }
         else if (magValue >= 3.5 * proximity_threshold){
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 1199);
+        	newARR = 1199;
+
         }
         else if (magValue >= 3 * proximity_threshold){
-            __HAL_TIM_SET_AUTORELOAD(&htim16, 3999);
+        	newARR = 3999;
         }
         else{
-        	__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
-
+        	newARR = 59999;
+        	//HAL_TIM_GenerateEvent(&htim16, TIM_EVENTSOURCE_UPDATE);
+        }
+        if (__HAL_TIM_GET_AUTORELOAD(&htim16) != newARR)
+        {
+            __HAL_TIM_SET_AUTORELOAD(&htim16, newARR);
+            HAL_TIM_GenerateEvent(&htim16, TIM_EVENTSOURCE_UPDATE);
+            HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
         }
 
 
@@ -391,6 +406,7 @@ void CatchAndRun(void)
         	buzzer_active = 1;
             detected = 1;
             detectStart = HAL_GetTick();
+            game_led_state = 1;
 
 
             if (role)
@@ -417,6 +433,8 @@ void CatchAndRun(void)
                 	cooldownStart = HAL_GetTick();
                     if (role){
                     	UART_Send("Player escaped, good job!\r\n");
+                    	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+
                     }
                     else{
                     	buzzer_active = 0;
@@ -424,6 +442,7 @@ void CatchAndRun(void)
                     	game_over = 1;
                     	UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
                     	__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
+                    	game_led_state = 0;
                     	BSP_LED_Off(LED2);
                     }
 
@@ -438,11 +457,14 @@ void CatchAndRun(void)
             	if (role){
             		UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
             		__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
+            		BSP_LED_Off(LED2);
+            		game_led_state = 0;
             	}
                 else{
                 	UART_Send("Player escaped! Keep trying.\r\n");
                 	detected = 0;
                 	buzzer_active = 0;
+                	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
                 }
             }
         }
@@ -478,11 +500,11 @@ void UART_Send_DMA(char *msg)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim == &htim16){
+    if ((htim == &htim16) && (game_led_state)){
     	BSP_LED_Toggle(LED2);
-    	//if (buzzer_active) {
-    		//HAL_GPIO_TogglePin(BUZZER_PORT, BUZZER_PIN);
-    	//}
+    	if (buzzer_active) {
+    		HAL_GPIO_TogglePin(BUZZER_PORT, BUZZER_PIN);
+    	}
     }
     else if ((htim == &htim17) && !(currentGame)) {
 		float temperature = BSP_TSENSOR_ReadTemp();
@@ -506,7 +528,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	    }
 
 	    // Humidity checks
-	    if (humidity > 75.0f) {
+	    if (humidity > 80.0f) {
 	        //char hum_msg[100];
 	        sprintf(temp_msg, "High humidity! %.1f%%. Heat stroke risk!\r\n", humidity);
 	        strcat(msg, temp_msg);
@@ -558,6 +580,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 	            // clear pending press
 	            press_pending = 0;
 	            Reset_Game(); //for resetting game 1 variables
+	            ssd1306_Fill(Black);
+	            ssd1306_UpdateScreen();
 	        }
 	        // add an && (now - last_press_time > 1000) if you want different variations of double press (rapid and slow)
 	        else if (press_pending && (now - last_press_time > 1000)){
