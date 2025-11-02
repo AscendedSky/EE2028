@@ -305,9 +305,9 @@ void RedLightGreenLight(void)
                 int16_t gyro_data_i16[3] = {0};
                 float gyro_data[3] = {0};
                 BSP_GYRO_GetXYZ(gyro_data_i16);
-                gyro_data[0] = (float)gyro_data_i16[0] * (35 / 1000.0f);
-                gyro_data[1] = (float)gyro_data_i16[1] * (35 / 1000.0f);
-                gyro_data[2] = (float)gyro_data_i16[2] * (35 / 1000.0f);
+                gyro_data[0] = (float)gyro_data_i16[0] / 1000.0f;
+                gyro_data[1] = (float)gyro_data_i16[1] / 1000.0f;
+                gyro_data[2] = (float)gyro_data_i16[2] / 1000.0f;
 
                 //read sound values in red light
                 HAL_ADC_Start(&hadc1);
