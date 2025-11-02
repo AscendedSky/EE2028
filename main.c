@@ -236,7 +236,7 @@ void RedLightGreenLight(void)
     {
         // Calibrate sensors just after green light
         int16_t accel_const_i16[3] = {0};
-        int16_t gyro_const_i16[3] = {0};
+        float gyro_const_i16[3] = {0};
 
         BSP_ACCELERO_AccGetXYZ(accel_const_i16);
         accel_const[0] = (float)accel_const_i16[0] * (9.8 / 1000.0f);
@@ -302,7 +302,7 @@ void RedLightGreenLight(void)
                 accel_data[1] = (float)accel_data_i16[1] * (9.8 / 1000.0f);
                 accel_data[2] = (float)accel_data_i16[2] * (9.8 / 1000.0f);
 
-                int16_t gyro_data_i16[3] = {0};
+                float gyro_data_i16[3] = {0};
                 float gyro_data[3] = {0};
                 BSP_GYRO_GetXYZ(gyro_data_i16);
                 gyro_data[0] = (float)gyro_data_i16[0] / 1000.0f;
@@ -342,7 +342,18 @@ void RedLightGreenLight(void)
             }
             game_seconds_count++;
         }
+        if (game_seconds_count > 20 && game_status == 1)
+        {
+            ssd1306_Fill(Black);
+            ssd1306_SetCursor(0,20);
+            ssd1306_WriteString("Game Restarting!", Font_7x10, White);
+            ssd1306_UpdateScreen();
+
+            Reset_Game();
+
+        }
     }
+
     else
     {
         game_status = 0; // Game over if time exceeds expected
@@ -388,7 +399,6 @@ void CatchAndRun(void)
         }
         else{
         	newARR = 59999;
-        	//HAL_TIM_GenerateEvent(&htim16, TIM_EVENTSOURCE_UPDATE);
         }
         if (__HAL_TIM_GET_AUTORELOAD(&htim16) != newARR)
         {
@@ -406,13 +416,13 @@ void CatchAndRun(void)
         	buzzer_active = 1;
             detected = 1;
             detectStart = HAL_GetTick();
-            game_led_state = 1;
 
-
-            if (role)
+            if (role){
             	UART_Send("Enforcer nearby! Be careful.\r\n");
-            else
+            }
+            else{
                 UART_Send("Player is nearby! Move faster.\r\n");
+            }
         }
 
         // While detected
@@ -431,19 +441,13 @@ void CatchAndRun(void)
                 	detected = 0;
                 	buzzer_active = 0;
                 	cooldownStart = HAL_GetTick();
+                	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
                     if (role){
                     	UART_Send("Player escaped, good job!\r\n");
-                    	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
 
                     }
                     else{
-                    	buzzer_active = 0;
                         UART_Send("Player captured, good job!\r\n");
-                    	game_over = 1;
-                    	UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
-                    	__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
-                    	game_led_state = 0;
-                    	BSP_LED_Off(LED2);
                     }
 
                 }
@@ -454,6 +458,7 @@ void CatchAndRun(void)
             	game_over = 1;
             	press_pending = 0;
             	buzzer_active = 0;
+            	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
             	if (role){
             		UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
             		__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
@@ -463,8 +468,6 @@ void CatchAndRun(void)
                 else{
                 	UART_Send("Player escaped! Keep trying.\r\n");
                 	detected = 0;
-                	buzzer_active = 0;
-                	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
                 }
             }
         }
