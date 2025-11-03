@@ -108,9 +108,7 @@ int main(void){
     ssd1306_Fill(Black);  // Clear display buffer
     ssd1306_SetCursor(0,32);
     ssd1306_Fill(Black);
-    ssd1306_WriteString("Welcome to EE2028 (It has not been fun)", Font_7x10, White);
-    ssd1306_UpdateScreen();
-    HAL_Delay(2000);
+    ssd1306_WriteString("Welcome to EE2028 Assignment 2", Font_7x10, White);
     ssd1306_UpdateScreen();
     while (1){
         static uint8_t lastGame = 2;
