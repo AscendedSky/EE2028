@@ -296,28 +296,29 @@ void RedLightGreenLight(void)
         	}
             UART_Send(msg);
 
-            if (game_seconds_count % 2 == 0)
-            {
-                int16_t accel_data_i16[3] = {0};
-                float accel_data[3] = {0};
-                BSP_ACCELERO_AccGetXYZ(accel_data_i16);
-                accel_data[0] = (float)accel_data_i16[0] * (9.8 / 1000.0f);
-                accel_data[1] = (float)accel_data_i16[1] * (9.8 / 1000.0f);
-                accel_data[2] = (float)accel_data_i16[2] * (9.8 / 1000.0f);
+            
+            int16_t accel_data_i16[3] = {0};
+            float accel_data[3] = {0};
+            BSP_ACCELERO_AccGetXYZ(accel_data_i16);
+            accel_data[0] = (float)accel_data_i16[0] * (9.8 / 1000.0f);
+            accel_data[1] = (float)accel_data_i16[1] * (9.8 / 1000.0f);
+            accel_data[2] = (float)accel_data_i16[2] * (9.8 / 1000.0f);
 
-                float gyro_data_i16[3] = {0};
-                float gyro_data[3] = {0};
-                BSP_GYRO_GetXYZ(gyro_data_i16);
-                gyro_data[0] = (float)gyro_data_i16[0] / 1000.0f;
-                gyro_data[1] = (float)gyro_data_i16[1] / 1000.0f;
-                gyro_data[2] = (float)gyro_data_i16[2] / 1000.0f;
+            float gyro_data_i16[3] = {0};
+            float gyro_data[3] = {0};
+            BSP_GYRO_GetXYZ(gyro_data_i16);
+            gyro_data[0] = (float)gyro_data_i16[0] / 1000.0f;
+            gyro_data[1] = (float)gyro_data_i16[1] / 1000.0f;
+            gyro_data[2] = (float)gyro_data_i16[2] / 1000.0f;
 
                 //read sound values in red light
-                HAL_ADC_Start(&hadc1);
-                HAL_ADC_PollForConversion(&hadc1, 20);
-                uint16_t soundValue = HAL_ADC_GetValue(&hadc1);
+            HAL_ADC_Start(&hadc1);
+            HAL_ADC_PollForConversion(&hadc1, 20);
+            uint16_t soundValue = HAL_ADC_GetValue(&hadc1);
 
-                sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
+            if (game_seconds_count % 2 == 0)
+            {
+				sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
                 UART_Send(msg);
                 sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_data[0], gyro_data[1], gyro_data[2]);
                 UART_Send(msg);
