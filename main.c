@@ -108,7 +108,7 @@ int main(void){
     ssd1306_Fill(Black);  // Clear display buffer
     ssd1306_SetCursor(0,32);
     ssd1306_Fill(Black);
-    ssd1306_WriteString("Welcome to EE2028 Assignment 2", Font_7x10, White);
+    ssd1306_WriteString("Welcome to EE2028", Font_7x10, White);
     ssd1306_UpdateScreen();
     while (1){
         static uint8_t lastGame = 2;
@@ -261,7 +261,7 @@ void RedLightGreenLight(void)
 
         game_calibrated = 1;
         game_last_tick = now;
-        BSP_LED_Off(LED2);
+
     }
     else if (game_seconds_count >= 11 && game_seconds_count <= 20)
     {
@@ -327,13 +327,14 @@ void RedLightGreenLight(void)
                     fabs(gyro_data[0] - gyro_const[0]) >= 10.0f ||
                     fabs(gyro_data[1] - gyro_const[1]) >= 10.0f ||
                     fabs(gyro_data[2] - gyro_const[2]) >= 10.0f ||
-					soundThreshold - soundValue >= 500)
+					soundValue - soundThreshold >= 700)
                 {
                     game_status = 0;  // Set game over
                     ssd1306_Fill(Black);
                     ssd1306_SetCursor(0,20);
                     ssd1306_WriteString("You Moved", Font_7x10, White);
                     ssd1306_SetCursor(0,40);
+                    press_pending = 0;
                     ssd1306_WriteString("Game Over", Font_7x10, White);
                     ssd1306_UpdateScreen();
                 }
