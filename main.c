@@ -377,6 +377,7 @@ void CatchAndRun(void)
     		double_press_slow = 0;
     		game_over = 0;
     		UART_Send("Replaying Catch And Run as Player\r\n");
+    		game_led_state = 1;
     		continue;
     	}
     	else if (game_over){
@@ -503,7 +504,7 @@ void UART_Send_DMA(char *msg)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if ((htim == &htim16) && (game_led_state)){
+    if ((htim == &htim16) && (game_led_state) && !(currentGame)){
     	BSP_LED_Toggle(LED2);
     	if (buzzer_active) {
     		HAL_GPIO_TogglePin(BUZZER_PORT, BUZZER_PIN);
@@ -863,7 +864,7 @@ void DMA1_Channel4_IRQHandler(void)
       {
           huart1.gState = HAL_UART_STATE_READY;
 
-          // Call TX complete callback manually (optional)
+          // Call TX complete callback manually
           HAL_UART_TxCpltCallback(&huart1);
       }
 }
