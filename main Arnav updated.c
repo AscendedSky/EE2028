@@ -288,7 +288,12 @@ void RedLightGreenLight(void)
         {
             game_last_tick = now;
             char msg[200];
-            sprintf(msg, "\r\n %d: Red Light. Cannot Move \r\n", game_seconds_count - 10);
+			if (game_seconds_count >= 11) {
+           		sprintf(msg, "\r\n %d: Red Light. Cannot Move \r\n", game_seconds_count - 10);
+        	} 
+			else {
+	            return
+        	}
             UART_Send(msg);
 
             if (game_seconds_count % 2 == 0)
@@ -319,7 +324,7 @@ void RedLightGreenLight(void)
 
                 sprintf(msg, "\r\n Sound Value: %d \r\n", soundValue);
                 UART_Send(msg);
-
+			}
 
             if (fabs(accel_data[0] - accel_const[0]) >= 0.5f ||
                 fabs(accel_data[1] - accel_const[1]) >= 0.5f ||
@@ -338,7 +343,6 @@ void RedLightGreenLight(void)
                     ssd1306_WriteString("Game Over", Font_7x10, White);
                     ssd1306_UpdateScreen();
                 }
-            }
             game_seconds_count++;
         }
         if (game_seconds_count > 20 && game_status == 1)
