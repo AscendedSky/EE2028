@@ -249,14 +249,14 @@ void RedLightGreenLight(void)
         // Sound value read to get noise threshold
         HAL_ADC_Start(&hadc1);
         HAL_ADC_PollForConversion(&hadc1, 20);
-        uint16_t soundThreshold = HAL_ADC_GetValue(&hadc1);
+        soundThreshold = HAL_ADC_GetValue(&hadc1);
 
         sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_const[0], accel_const[1], accel_const[2]);
         UART_Send(msg);
         sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_const[0], gyro_const[1], gyro_const[2]);
         UART_Send(msg);
 
-        sprintf(msg, "\r\n Sound Value: %d \r\n", soundThreshold);
+        sprintf(msg, "\r\n Sound Threshold: %d \r\n", soundThreshold);
         UART_Send(msg);
 
         game_calibrated = 1;
@@ -288,15 +288,8 @@ void RedLightGreenLight(void)
         {
             game_last_tick = now;
             char msg[200];
-			if (game_seconds_count >= 11) {
-           		sprintf(msg, "\r\n %d: Red Light. Cannot Move \r\n", game_seconds_count - 10);
-        	} 
-			else {
-	            return
-        	}
+            sprintf(msg, "\r\n %d: Red Light. Cannot Move \r\n", game_seconds_count - 10);
             UART_Send(msg);
-
-            
             int16_t accel_data_i16[3] = {0};
             float accel_data[3] = {0};
             BSP_ACCELERO_AccGetXYZ(accel_data_i16);
@@ -311,39 +304,38 @@ void RedLightGreenLight(void)
             gyro_data[1] = (float)gyro_data_i16[1] / 1000.0f;
             gyro_data[2] = (float)gyro_data_i16[2] / 1000.0f;
 
-                //read sound values in red light
+            //read sound values in red light
             HAL_ADC_Start(&hadc1);
             HAL_ADC_PollForConversion(&hadc1, 20);
             uint16_t soundValue = HAL_ADC_GetValue(&hadc1);
 
             if (game_seconds_count % 2 == 0)
             {
-				sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
+
+                sprintf(msg, "\r\n Accel X: %f \r\n Accel Y: %f \r\n Accel Z: %f \r\n", accel_data[0], accel_data[1], accel_data[2]);
                 UART_Send(msg);
                 sprintf(msg, "\r\n Gyro X: %f \r\n Gyro Y: %f \r\n Gyro Z: %f \r\n", gyro_data[0], gyro_data[1], gyro_data[2]);
                 UART_Send(msg);
 
                 sprintf(msg, "\r\n Sound Value: %d \r\n", soundValue);
                 UART_Send(msg);
-			}
-
+            }
             if (fabs(accel_data[0] - accel_const[0]) >= 0.5f ||
                 fabs(accel_data[1] - accel_const[1]) >= 0.5f ||
                 fabs(accel_data[2] - accel_const[2]) >= 0.5f ||
                 fabs(gyro_data[0] - gyro_const[0]) >= 10.0f ||
                 fabs(gyro_data[1] - gyro_const[1]) >= 10.0f ||
                 fabs(gyro_data[2] - gyro_const[2]) >= 10.0f ||
-					      soundValue - soundThreshold >= 700)
-                {
-                    game_status = 0;  // Set game over
-                    ssd1306_Fill(Black);
-                    ssd1306_SetCursor(0,20);
-                    ssd1306_WriteString("You Moved", Font_7x10, White);
-                    ssd1306_SetCursor(0,40);
-                    press_pending = 0;
-                    ssd1306_WriteString("Game Over", Font_7x10, White);
-                    ssd1306_UpdateScreen();
-                }
+                soundValue - soundThreshold >= 1000){
+            	game_status = 0;  // Set game over
+            	ssd1306_Fill(Black);
+                ssd1306_SetCursor(0,20);
+                ssd1306_WriteString("You Moved", Font_7x10, White);
+                ssd1306_SetCursor(0,40);
+                press_pending = 0;
+                ssd1306_WriteString("Game Over", Font_7x10, White);
+                ssd1306_UpdateScreen();
+            }
             game_seconds_count++;
         }
         if (game_seconds_count > 20 && game_status == 1)
