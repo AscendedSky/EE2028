@@ -35,7 +35,7 @@ ADC_HandleTypeDef hadc1;
 
 uint8_t role = 1;   // Change manually (1 - Player, 0 - Enforcer)
 
-//Global static variables for Catch and Run
+//Global static constant variables for Catch and Run
 static const float mag_threshold = 350.0f;
 static const float proximity_threshold = 100.0f;
 static const uint16_t escape_window_ms = 3000; // 3-second reaction time window
@@ -45,7 +45,6 @@ static int game_status = 1;
 static int game_seconds_count = 0;
 static uint32_t game_last_tick = 0;
 static uint32_t game_blink_tick = 0;
-volatile uint8_t game_led_state = 0;
 static uint8_t game_initialized = 0;  // 0 = not started, 1 = playing, 2 = waiting before start
 static uint8_t game_calibrated = 0;
 static uint8_t game_over_msg_sent = 0;  // Flag for sending game over message once
@@ -54,7 +53,7 @@ static float gyro_const[3] = {0};
 static uint16_t soundThreshold = 0;
 
 
-/* --- Pins --- */
+// Pins
 #define BUZZER_PIN         GPIO_PIN_14 // D2 (PD14)
 #define BUZZER_PORT        GPIOD
 #define SOUND_SENSOR_PIN   GPIO_PIN_3   // A2 (PC3)
@@ -81,6 +80,7 @@ uint8_t press_pending = 0;       // 1 if a single press waiting for possible dou
 uint8_t double_press_slow = 0;
 volatile uint8_t currentGame = 1; //0 for catch and run, 1 for red light green light
 volatile uint8_t buzzer_active = 0;
+volatile uint8_t game_led_state = 0;
 
 
 int main(void){
@@ -461,6 +461,7 @@ void CatchAndRun(void)
             	buzzer_active = 0;
             	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
             	if (role){
+            		double_press_slow = 0;
             		UART_Send("Game Over. Press double button slowly to replay. Press double button rapidly to switch.\r\n");
             		__HAL_TIM_SET_AUTORELOAD(&htim16, 59999);
             		BSP_LED_Off(LED2);
@@ -476,9 +477,7 @@ void CatchAndRun(void)
     }
 }
 
-/* ============================================================= */
-/*                      HELPER FUNCTIONS                         */
-/* ============================================================= */
+// HELPER FUNCTIONS
 
 float Read_Magnetometer(void)
 {
@@ -516,44 +515,43 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		float pressure = BSP_PSENSOR_ReadPressure();
 
 
-		//char msg1[512];
+
 	    msg[0] = '\0'; // Initialize empty string
 	    char temp_msg[100]; // Temporary buffer
 
 	    // Temperature checks
 	    if (temperature > 35.0f) {
-	        //char temp_msg[100];
+
 	        sprintf(temp_msg, "Temperature spike detected! T:%.1fC. Dangerous environment!\r\n", temperature);
 	        strcat(msg, temp_msg);
 	    } else if (temperature < 5.0f) {
-	        //char temp_msg[100];
+
 	        sprintf(temp_msg, "Temperature drop detected! T:%.1fC. Dangerous environment!\r\n", temperature);
 	        strcat(msg, temp_msg);
 	    }
 
 	    // Humidity checks
 	    if (humidity > 80.0f) {
-	        //char hum_msg[100];
+
 	        sprintf(temp_msg, "High humidity! %.1f%%. Heat stroke risk!\r\n", humidity);
 	        strcat(msg, temp_msg);
 	    } else if (humidity < 30.0f) {
-	        //char hum_msg[100];
+
 	        sprintf(temp_msg, "Low humidity! %.1f%%. Dehydration risk!\r\n", humidity);
 	        strcat(msg, temp_msg);
 	    }
 
 	    // Pressure checks
 	    if (pressure < 950.0f) {
-	        //char pres_msg[100];
+
 	        sprintf(temp_msg, "Low pressure! %.1f hPa. Risk of dizziness!\r\n", pressure);
 	        strcat(msg, temp_msg);
 	    } else if (pressure > 1050.0f) {
-	        //char pres_msg[100];
+
 	        sprintf(temp_msg, "High pressure! %.1f hPa. Risk of headache!\r\n", pressure);
 	        strcat(msg, temp_msg);
 	    }
 
-	    // Send all messages in a single DMA transmission
 
 	    // Send all messages in a single DMA transmission
 	    if (strlen(msg) > 0) {
@@ -570,13 +568,13 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 	    {
 	        uint32_t now = HAL_GetTick();
 
-	        // --- Debounce (ignore within 50 ms) ---
+	        // Debounce (ignore within 50 ms)
 	        static uint32_t debounce_time = 0;
 	        if (now - debounce_time < 50)
 	            return;
 	        debounce_time = now;
 
-	        // --- Double-press detection ---
+	        //Double-press detection
 	        if (press_pending && (now - last_press_time <= 1000))
 	        {
 	            // second press within 1 s → double press so switch game
@@ -718,8 +716,8 @@ static void MX_ADC1_Init(void)
 {
   ADC_ChannelConfTypeDef sConfig = {0};
 
-  __HAL_RCC_ADC_CLK_ENABLE();     // <-- Make sure ADC clock is on
-  __HAL_RCC_GPIOC_CLK_ENABLE();   // <-- Make sure GPIO clock is on
+  __HAL_RCC_ADC_CLK_ENABLE();     //  Make sure ADC clock is on
+  __HAL_RCC_GPIOC_CLK_ENABLE();   //  Make sure GPIO clock is on
 
   // Configure PC3 as analog input
   GPIO_InitTypeDef GPIO_InitStruct = {0};
